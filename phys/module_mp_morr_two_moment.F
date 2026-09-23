@@ -1179,6 +1179,26 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
       REAL FALTNDNR
       REAL, DIMENSION(KTS:KTE) ::   FNR
 
+! QWRF: opt-in serial shadow comparison for rain mass and number.  These
+! arrays never feed back into the Morrison forecast state.
+      REAL, DIMENSION(KTS:KTE) :: QWRF_BQR,QWRF_BNR,QWRF_XQR,QWRF_XNR
+      INTEGER, SAVE :: QWRF_SHADOW_STATE = -1, QWRF_SHADOW_COUNT = 0
+      INTEGER QWRF_SHADOW_UNIT,QWRF_SHADOW_IO
+      INTEGER QWRF_SHADOW_REPEAT,QWRF_SHADOW_REPS
+      INTEGER(KIND=8) QWRF_TICK_START,QWRF_TICK_END,QWRF_TICK_RATE
+      REAL(KIND=8) QWRF_SOLVE_US
+      CHARACTER(LEN=16) QWRF_SHADOW_ENV
+      LOGICAL QWRF_SHADOW_THIS
+
+! QWRF ensemble: independent frozen-speed implicit references for all ten
+! transported densities. Only serial, opt-in diagnostics; no forecast update.
+      REAL, DIMENSION(KTS:KTE,10) :: QWRF_EB,QWRF_EV,QWRF_EX,QWRF_EOUT
+      INTEGER, SAVE :: QWRF_ESTATE = -1, QWRF_ECALLS = 0
+      INTEGER, SAVE :: QWRF_ECOUNTS(4) = 0, QWRF_ELAST(4) = 0
+      INTEGER QWRF_ECLASS,QWRF_EFIELD,QWRF_EUNIT,QWRF_EIO
+      CHARACTER(LEN=16) QWRF_EENV
+      LOGICAL QWRF_ETHIS
+
 ! FALL-SPEED PARAMETER 'A' WITH AIR DENSITY CORRECTION
 
       REAL, DIMENSION(KTS:KTE) ::    AIN,ARN,ASN,ACN,AGN
@@ -3344,6 +3364,21 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
         IF (LTRUE.EQ.0) GOTO 400
 
+      QWRF_SHADOW_THIS = .FALSE.
+      QWRF_ETHIS = .FALSE.
+      IF (QWRF_SHADOW_STATE.EQ.-1) THEN
+        QWRF_SHADOW_ENV = ''
+        CALL GET_ENVIRONMENT_VARIABLE('QWRF_SHADOW',QWRF_SHADOW_ENV)
+        QWRF_SHADOW_STATE = 0
+        IF (TRIM(QWRF_SHADOW_ENV).EQ.'1') QWRF_SHADOW_STATE = 1
+      END IF
+      IF (QWRF_ESTATE.EQ.-1) THEN
+        QWRF_EENV = ''
+        CALL GET_ENVIRONMENT_VARIABLE('QWRF_ENSEMBLE',QWRF_EENV)
+        QWRF_ESTATE = 0
+        IF (TRIM(QWRF_EENV).EQ.'1') QWRF_ESTATE = 1
+      END IF
+
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 !.......................................................................
 ! CALCULATE SEDIMENATION
@@ -3557,6 +3592,85 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
       END DO
 
+! Solve the frozen-velocity backward-Euler rain systems by downward
+! substitution.  This is an independent classical reference, not a replacement
+! for WRF's explicit transport below.  Capture only the first rainy column.
+      IF (QWRF_SHADOW_STATE.EQ.1 .AND. QWRF_SHADOW_COUNT.EQ.0) THEN
+        IF (MAXVAL(DUMR(KTS:KTE)).GT.1.E-4 .AND. &
+            DUMR(KTS).GT.1.E-6) THEN
+          QWRF_SHADOW_THIS = .TRUE.
+          QWRF_BQR(KTS:KTE) = DUMR(KTS:KTE)
+          QWRF_BNR(KTS:KTE) = DUMFNR(KTS:KTE)
+          QWRF_SHADOW_REPS = 100000
+          CALL SYSTEM_CLOCK(QWRF_TICK_START,QWRF_TICK_RATE)
+          DO QWRF_SHADOW_REPEAT = 1,QWRF_SHADOW_REPS
+          DO K = KTE,KTS,-1
+            QWRF_XQR(K) = QWRF_BQR(K)
+            QWRF_XNR(K) = QWRF_BNR(K)
+            IF (K.LT.KTE) THEN
+              QWRF_XQR(K) = QWRF_XQR(K)+DT*FR(K+1)*QWRF_XQR(K+1)/DZQ(K)
+              QWRF_XNR(K) = QWRF_XNR(K)+DT*FNR(K+1)*QWRF_XNR(K+1)/DZQ(K)
+            END IF
+            QWRF_XQR(K) = QWRF_XQR(K)/(1.+DT*FR(K)/DZQ(K))
+            QWRF_XNR(K) = QWRF_XNR(K)/(1.+DT*FNR(K)/DZQ(K))
+          END DO
+          END DO
+          CALL SYSTEM_CLOCK(QWRF_TICK_END)
+          QWRF_SOLVE_US = 1.D6*DBLE(QWRF_TICK_END-QWRF_TICK_START) &
+               /DBLE(QWRF_TICK_RATE)/DBLE(QWRF_SHADOW_REPS)
+        END IF
+      END IF
+
+! Select at most two separated columns in each mutually exclusive class:
+! warm rain, cold dominated, mixed phase, and WRF multi-substep.
+      IF (QWRF_ESTATE.EQ.1) THEN
+        QWRF_ECALLS = QWRF_ECALLS+1
+        QWRF_ECLASS = 0
+        IF (NSTEP.GT.1 .AND. &
+            MAX(MAXVAL(DUMR),MAXVAL(DUMI),MAXVAL(DUMQS), &
+                MAXVAL(DUMG)).GT.1.E-5) THEN
+          QWRF_ECLASS = 4
+        ELSE IF (MAXVAL(DUMR).GT.1.E-5 .AND. &
+            MAX(MAXVAL(DUMI),MAXVAL(DUMQS),MAXVAL(DUMG)).GT.1.E-5) THEN
+          QWRF_ECLASS = 3
+        ELSE IF (MAX(MAXVAL(DUMI),MAXVAL(DUMQS),MAXVAL(DUMG)).GT.1.E-5 &
+            .AND. MAXVAL(DUMR).LT.1.E-6) THEN
+          QWRF_ECLASS = 2
+        ELSE IF (MAXVAL(DUMR).GT.1.E-5 .AND. &
+            MAX(MAXVAL(DUMI),MAXVAL(DUMQS),MAXVAL(DUMG)).LT.1.E-6) THEN
+          QWRF_ECLASS = 1
+        END IF
+        IF (QWRF_ECLASS.GT.0) THEN
+          IF (QWRF_ECOUNTS(QWRF_ECLASS).LT.2 .AND. &
+              (QWRF_ECOUNTS(QWRF_ECLASS).EQ.0 .OR. &
+               QWRF_ECALLS-QWRF_ELAST(QWRF_ECLASS).GE.5000)) THEN
+            QWRF_ETHIS = .TRUE.
+            QWRF_ECOUNTS(QWRF_ECLASS) = QWRF_ECOUNTS(QWRF_ECLASS)+1
+            QWRF_ELAST(QWRF_ECLASS) = QWRF_ECALLS
+            QWRF_EB(:,1)=DUMR;   QWRF_EV(:,1)=FR
+            QWRF_EB(:,2)=DUMFNR; QWRF_EV(:,2)=FNR
+            QWRF_EB(:,3)=DUMI;   QWRF_EV(:,3)=FI
+            QWRF_EB(:,4)=DUMFNI; QWRF_EV(:,4)=FNI
+            QWRF_EB(:,5)=DUMQS;  QWRF_EV(:,5)=FS
+            QWRF_EB(:,6)=DUMFNS; QWRF_EV(:,6)=FNS
+            QWRF_EB(:,7)=DUMG;   QWRF_EV(:,7)=FG
+            QWRF_EB(:,8)=DUMFNG; QWRF_EV(:,8)=FNG
+            QWRF_EB(:,9)=DUMC;   QWRF_EV(:,9)=FC
+            QWRF_EB(:,10)=DUMFNC;QWRF_EV(:,10)=FNC
+            DO QWRF_EFIELD=1,10
+              DO K=KTE,KTS,-1
+                QWRF_EX(K,QWRF_EFIELD)=QWRF_EB(K,QWRF_EFIELD)
+                IF (K.LT.KTE) QWRF_EX(K,QWRF_EFIELD)= &
+                    QWRF_EX(K,QWRF_EFIELD)+DT*QWRF_EV(K+1,QWRF_EFIELD) &
+                    *QWRF_EX(K+1,QWRF_EFIELD)/DZQ(K)
+                QWRF_EX(K,QWRF_EFIELD)=QWRF_EX(K,QWRF_EFIELD) &
+                    /(1.+DT*QWRF_EV(K,QWRF_EFIELD)/DZQ(K))
+              END DO
+            END DO
+          END IF
+        END IF
+      END IF
+
       DO N = 1,NSTEP
 
       DO K = KTS,KTE
@@ -3665,6 +3779,53 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         GRPLPRT = GRPLPRT+(FALOUTG(KTS))*DT/NSTEP
 
       END DO
+
+      IF (QWRF_SHADOW_THIS) THEN
+        QWRF_SHADOW_COUNT = QWRF_SHADOW_COUNT+1
+        OPEN(NEWUNIT=QWRF_SHADOW_UNIT,FILE='qwrf_shadow.dat', &
+             STATUS='REPLACE',ACTION='WRITE',IOSTAT=QWRF_SHADOW_IO)
+        IF (QWRF_SHADOW_IO.EQ.0) THEN
+          WRITE(QWRF_SHADOW_UNIT,*) 'QWRF_SHADOW_BEGIN', &
+               KTE-KTS+1,DT,NSTEP,QWRF_SHADOW_REPS,QWRF_SOLVE_US
+          DO K = KTS,KTE
+            WRITE(QWRF_SHADOW_UNIT,*) 'QWRF_SHADOW_QR',K, &
+                 DZQ(K),RHO(K),FR(K),QWRF_BQR(K),DUMR(K),QWRF_XQR(K)
+            WRITE(QWRF_SHADOW_UNIT,*) 'QWRF_SHADOW_NR',K, &
+                 DZQ(K),RHO(K),FNR(K),QWRF_BNR(K),DUMFNR(K),QWRF_XNR(K)
+          END DO
+          WRITE(QWRF_SHADOW_UNIT,*) 'QWRF_SHADOW_END'
+          CLOSE(QWRF_SHADOW_UNIT)
+        END IF
+      END IF
+
+      IF (QWRF_ETHIS) THEN
+        QWRF_EOUT(:,1)=DUMR;   QWRF_EOUT(:,2)=DUMFNR
+        QWRF_EOUT(:,3)=DUMI;   QWRF_EOUT(:,4)=DUMFNI
+        QWRF_EOUT(:,5)=DUMQS;  QWRF_EOUT(:,6)=DUMFNS
+        QWRF_EOUT(:,7)=DUMG;   QWRF_EOUT(:,8)=DUMFNG
+        QWRF_EOUT(:,9)=DUMC;   QWRF_EOUT(:,10)=DUMFNC
+        IF (SUM(QWRF_ECOUNTS).EQ.1) THEN
+          OPEN(NEWUNIT=QWRF_EUNIT,FILE='qwrf_ensemble.dat', &
+               STATUS='REPLACE',ACTION='WRITE',IOSTAT=QWRF_EIO)
+        ELSE
+          OPEN(NEWUNIT=QWRF_EUNIT,FILE='qwrf_ensemble.dat', &
+               STATUS='OLD',POSITION='APPEND',ACTION='WRITE',IOSTAT=QWRF_EIO)
+        END IF
+        IF (QWRF_EIO.EQ.0) THEN
+          WRITE(QWRF_EUNIT,*) 'QWRF_ENSEMBLE_BEGIN',QWRF_ECLASS, &
+               QWRF_ECALLS,KTE-KTS+1,DT,NSTEP
+          DO QWRF_EFIELD=1,10
+            DO K=KTS,KTE
+              WRITE(QWRF_EUNIT,*) 'QWRF_ENSEMBLE_FIELD', &
+                   QWRF_EFIELD,K,DZQ(K),RHO(K), &
+                   QWRF_EV(K,QWRF_EFIELD),QWRF_EB(K,QWRF_EFIELD), &
+                   QWRF_EOUT(K,QWRF_EFIELD),QWRF_EX(K,QWRF_EFIELD)
+            END DO
+          END DO
+          WRITE(QWRF_EUNIT,*) 'QWRF_ENSEMBLE_END'
+          CLOSE(QWRF_EUNIT)
+        END IF
+      END IF
 
         DO K=KTS,KTE
 
