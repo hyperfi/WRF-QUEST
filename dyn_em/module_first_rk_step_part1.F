@@ -1,7 +1,12 @@
 !WRF:MEDIATION_LAYER:SOLVER
 
+#ifdef QWRF_PROFILE
+#define BENCH_START(A) CALL SYSTEM_CLOCK(qwrf_phase_start,qwrf_phase_rate)
+#define BENCH_END(A) CALL SYSTEM_CLOCK(qwrf_phase_end); WRITE(0,*) 'QWRF_PHASE', __LINE__, DBLE(qwrf_phase_end-qwrf_phase_start)/DBLE(qwrf_phase_rate)
+#else
 #define BENCH_START(A)
 #define BENCH_END(A)
+#endif
 
 MODULE module_first_rk_step_part1
 
@@ -72,6 +77,10 @@ CONTAINS
 #endif
 
     IMPLICIT NONE
+
+#ifdef QWRF_PROFILE
+    INTEGER(KIND=8) :: qwrf_phase_start, qwrf_phase_end, qwrf_phase_rate
+#endif
 
     TYPE ( domain ), INTENT(INOUT) :: grid
     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags

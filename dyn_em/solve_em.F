@@ -86,6 +86,10 @@ SUBROUTINE solve_em ( grid , config_flags  &
 
    IMPLICIT NONE
 
+#ifdef QWRF_PROFILE
+   INTEGER(KIND=8) :: qwrf_solve_start, qwrf_micro_start, qwrf_now, qwrf_rate
+#endif
+
    !  Input data.
 
    TYPE(domain) , TARGET          :: grid
@@ -270,6 +274,10 @@ SUBROUTINE solve_em ( grid , config_flags  &
 
 ! Initialize timers if compiled with -DBENCH
 #include "bench_solve_em_init.h"
+
+#ifdef QWRF_PROFILE
+   CALL SYSTEM_CLOCK(qwrf_solve_start,qwrf_rate)
+#endif
 
 #if (WRF_CMAQ == 1)
    if (firstime) then
@@ -3855,6 +3863,10 @@ BENCH_END(moist_physics_prep_tim)
 
 BENCH_START(micro_driver_tim)
 
+#ifdef QWRF_PROFILE
+   CALL SYSTEM_CLOCK(qwrf_micro_start)
+#endif
+
 !
 ! WRFU_AlarmIsRinging always returned false, so using an alternate  method to find out if it is time 
 ! to dump history/restart files so microphysics can be told to calculate things like radar reflectivity.
@@ -4151,6 +4163,11 @@ BENCH_START(micro_driver_tim)
 
                                                                           
 BENCH_END(micro_driver_tim)
+
+#ifdef QWRF_PROFILE
+   CALL SYSTEM_CLOCK(qwrf_now)
+   WRITE(0,*) 'QWRF_MICRO', DBLE(qwrf_now-qwrf_micro_start)/DBLE(qwrf_rate)
+#endif
 
 #if 0
 BENCH_START(microswap_2)
@@ -5104,6 +5121,11 @@ BENCH_END(bc_2d_tim)
 
 ! Finish timers if compiled with -DBENCH.
 #include "bench_solve_em_end.h"
+
+#ifdef QWRF_PROFILE
+   CALL SYSTEM_CLOCK(qwrf_now)
+   WRITE(0,*) 'QWRF_SOLVE', DBLE(qwrf_now-qwrf_solve_start)/DBLE(qwrf_rate)
+#endif
 
 #if (WRF_CMAQ == 1)
    if (firstime) then

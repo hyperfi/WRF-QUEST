@@ -328,6 +328,10 @@ CONTAINS
    !
 !----------------------------------------------------------------------
    IMPLICIT NONE
+
+#ifdef QWRF_PROFILE
+   INTEGER(KIND=8) :: qwrf_rad_start, qwrf_rad_end, qwrf_rad_rate
+#endif
 !<DESCRIPTION>
 !
 ! Radiation_driver is the WRF mediation layer routine that provides the interface to
@@ -2045,6 +2049,9 @@ CONTAINS
                               its, ite, jts, jte, kts, kte     )
              ENDIF
 
+#ifdef QWRF_PROFILE
+             CALL SYSTEM_CLOCK(qwrf_rad_start,qwrf_rad_rate)
+#endif
              CALL RRTMG_LWRAD(                                      &
                   RTHRATENLW=RTHRATEN,                              &
                   RTHRATENLWC=RTHRATENLWC,                          &
@@ -2098,6 +2105,11 @@ CONTAINS
                   LWUPFLX=LWUPFLX,LWUPFLXC=LWUPFLXC,                &
                   LWDNFLX=LWDNFLX,LWDNFLXC=LWDNFLXC,                &
                   mp_physics=mp_physics                             )
+
+#ifdef QWRF_PROFILE
+             CALL SYSTEM_CLOCK(qwrf_rad_end)
+             WRITE(0,*) 'QWRF_RRTMG_LW', DBLE(qwrf_rad_end-qwrf_rad_start)/DBLE(qwrf_rad_rate)
+#endif
 
 
 #if( BUILD_RRTMK == 1)
@@ -2571,6 +2583,9 @@ CONTAINS
                 proceed_cmaq_sw = .false.
              end if
 
+#ifdef QWRF_PROFILE
+             CALL SYSTEM_CLOCK(qwrf_rad_start,qwrf_rad_rate)
+#endif
              CALL RRTMG_SWRAD(                                         &
                      RTHRATENSW=RTHRATENSW,                            &
                      RTHRATENSWC=RTHRATENSWC,                          &
@@ -2676,6 +2691,11 @@ CONTAINS
                      sw_dirdflux=sw_dirdflux,                           & ! WRF-CMAQ coupled model
                      sw_difdflux=sw_difdflux                            & ! WRF-CMAQ coupled model
                                                                         )
+
+#ifdef QWRF_PROFILE
+             CALL SYSTEM_CLOCK(qwrf_rad_end)
+             WRITE(0,*) 'QWRF_RRTMG_SW', DBLE(qwrf_rad_end-qwrf_rad_start)/DBLE(qwrf_rad_rate)
+#endif
 
              ! = WRF-CMAQ twoway coupled model
              if (proceed_cmaq_sw) then

@@ -10426,6 +10426,12 @@ CONTAINS
                                                   snow_mass_factor
     integer ::                                            dyofyr
 
+#ifdef QWRF_PROFILE
+    INTEGER(KIND=8) :: qwrf_sw_t0, qwrf_sw_t1, qwrf_sw_rate
+    REAL(KIND=8) :: qwrf_mcica_s, qwrf_core_s
+    INTEGER :: qwrf_daylit_columns
+#endif
+
     integer:: idx_rei
     real:: corr
 
@@ -10570,6 +10576,13 @@ CONTAINS
 ! All fields are ordered vertically from bottom to top
 ! Pressures are in mb
 
+#ifdef QWRF_PROFILE
+  CALL SYSTEM_CLOCK(count_rate=qwrf_sw_rate)
+  qwrf_mcica_s = 0D0
+  qwrf_core_s = 0D0
+  qwrf_daylit_columns = 0
+#endif
+
 ! latitude loop
   j_loop: do j = jts,jte
 
@@ -10590,6 +10603,9 @@ CONTAINS
          if (coszrs.le.0.0) dorrsw = .false.
 ! Perform shortwave calculation if sun above horizon
          if (dorrsw) then
+#ifdef QWRF_PROFILE
+         qwrf_daylit_columns = qwrf_daylit_columns + 1
+#endif
 
          do k=kts,kte+1
             Pw1D(K) = p8w(I,K,J)/100.
@@ -11223,11 +11239,19 @@ CONTAINS
 
 ! Sub-column generator for McICA
          lat = XLAT(i,j) !retrieve scalar latitude for column calculation
+#ifdef QWRF_PROFILE
+         CALL SYSTEM_CLOCK(qwrf_sw_t0)
+#endif
          call mcica_subcol_sw(iplon, ncol, nlay, icld, permuteseed, irng, play, &
                        cldfrac, ciwpth, clwpth, cswpth, rei, rel, res, taucld, ssacld, asmcld, fsfcld, &
                        hgt, idcor, juldat, lat, &
                        cldfmcl, ciwpmcl, clwpmcl, cswpmcl, reicmcl, relqmcl, resnmcl, &
                        taucmcl, ssacmcl, asmcmcl, fsfcmcl)
+
+#ifdef QWRF_PROFILE
+         CALL SYSTEM_CLOCK(qwrf_sw_t1)
+         qwrf_mcica_s = qwrf_mcica_s + DBLE(qwrf_sw_t1-qwrf_sw_t0)/DBLE(qwrf_sw_rate)
+#endif
 
 
 !--------------------------------------------------------------------------
@@ -11461,6 +11485,9 @@ CONTAINS
 
 ! Call RRTMG shortwave radiation model
 
+#ifdef QWRF_PROFILE
+         CALL SYSTEM_CLOCK(qwrf_sw_t0)
+#endif
          call rrtmg_sw &
             (ncol    ,nlay    ,icld    , &
              play    ,plev    ,tlay    ,tlev    ,tsfc   , &
@@ -11482,6 +11509,11 @@ CONTAINS
              ,loc_sw_dirdflux                      &  ! WRF-CMAQ twoway coupled model
              ,loc_sw_difdflux                      &  ! WRF-CMAQ twoway coupled model
                                                    )
+
+#ifdef QWRF_PROFILE
+         CALL SYSTEM_CLOCK(qwrf_sw_t1)
+         qwrf_core_s = qwrf_core_s + DBLE(qwrf_sw_t1-qwrf_sw_t0)/DBLE(qwrf_sw_rate)
+#endif
 
          ! WRF-CMAQ twoway coupled model
          if (present(sw_zbbcddir)) then
@@ -11599,6 +11631,10 @@ CONTAINS
 !
       end do i_loop
    end do j_loop                                           
+
+#ifdef QWRF_PROFILE
+   WRITE(0,*) 'QWRF_SW_DETAIL', qwrf_daylit_columns, qwrf_mcica_s, qwrf_core_s
+#endif
 
 
 !-------------------------------------------------------------------
