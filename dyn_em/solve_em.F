@@ -1,5 +1,15 @@
 !WRF:MEDIATION_LAYER:SOLVER
 
+#ifdef QWRF_ATTR_PROFILE
+#define QWRF_ATTR_MARK(I) CALL SYSTEM_CLOCK(qwrf_attr_now); qwrf_attr_s(I)=qwrf_attr_s(I)+DBLE(qwrf_attr_now-qwrf_attr_last)/DBLE(qwrf_attr_rate); qwrf_attr_last=qwrf_attr_now; qwrf_pcontrol_rc=qwrf_pcontrol(I)
+#define QWRF_ATTR_SUB_MARK(I) CALL SYSTEM_CLOCK(qwrf_attr_sub_now); qwrf_attr_s(I)=qwrf_attr_s(I)+DBLE(qwrf_attr_sub_now-qwrf_attr_sub_last)/DBLE(qwrf_attr_rate); qwrf_attr_sub_last=qwrf_attr_sub_now; qwrf_pcontrol_rc=qwrf_pcontrol(I)
+#define QWRF_ATTR_FINAL_MARK(I) CALL SYSTEM_CLOCK(qwrf_attr_final_now); qwrf_attr_s(I)=qwrf_attr_s(I)+DBLE(qwrf_attr_final_now-qwrf_attr_final_last)/DBLE(qwrf_attr_rate); qwrf_attr_final_last=qwrf_attr_final_now; qwrf_pcontrol_rc=qwrf_pcontrol(I)
+#else
+#define QWRF_ATTR_MARK(I)
+#define QWRF_ATTR_SUB_MARK(I)
+#define QWRF_ATTR_FINAL_MARK(I)
+#endif
+
 SUBROUTINE solve_em ( grid , config_flags  &
 ! Arguments generated from Registry
 #include "dummy_new_args.inc"
@@ -83,11 +93,29 @@ SUBROUTINE solve_em ( grid , config_flags  &
    use twoway_data_module
 #endif
    USE module_firebrand_spotting, ONLY : firebrand_spotting_em_driver
+#ifdef QWRF_ATTR_PROFILE
+   USE ISO_C_BINDING, ONLY : C_INT
+#endif
 
    IMPLICIT NONE
 
 #ifdef QWRF_PROFILE
    INTEGER(KIND=8) :: qwrf_solve_start, qwrf_micro_start, qwrf_now, qwrf_rate
+#endif
+#ifdef QWRF_ATTR_PROFILE
+   INTEGER(KIND=8) :: qwrf_attr_last, qwrf_attr_now, qwrf_attr_rate
+   INTEGER(KIND=8) :: qwrf_attr_call_start, qwrf_attr_call_end
+   INTEGER(KIND=8) :: qwrf_attr_sub_last, qwrf_attr_sub_now
+   INTEGER(KIND=8) :: qwrf_attr_final_last, qwrf_attr_final_now
+   REAL(KIND=8) :: qwrf_attr_s(23)
+   INTEGER(C_INT) :: qwrf_pcontrol_rc
+   INTERFACE
+      FUNCTION qwrf_pcontrol(level) BIND(C, NAME="MPI_Pcontrol") RESULT(rc)
+         IMPORT :: C_INT
+         INTEGER(C_INT), VALUE :: level
+         INTEGER(C_INT) :: rc
+      END FUNCTION qwrf_pcontrol
+   END INTERFACE
 #endif
 
    !  Input data.
@@ -277,6 +305,11 @@ SUBROUTINE solve_em ( grid , config_flags  &
 
 #ifdef QWRF_PROFILE
    CALL SYSTEM_CLOCK(qwrf_solve_start,qwrf_rate)
+#endif
+#ifdef QWRF_ATTR_PROFILE
+   qwrf_attr_s = 0D0
+   CALL SYSTEM_CLOCK(qwrf_attr_last,qwrf_attr_rate)
+   qwrf_pcontrol_rc = qwrf_pcontrol(0)
 #endif
 
 #if (WRF_CMAQ == 1)
@@ -588,7 +621,12 @@ SUBROUTINE solve_em ( grid , config_flags  &
 !</DESCRIPTION>
 !**********************************************************************
 
+QWRF_ATTR_MARK(1)
    Runge_Kutta_loop:  DO rk_step = 1, rk_order
+#ifdef QWRF_ATTR_PROFILE
+     CALL SYSTEM_CLOCK(qwrf_attr_sub_last)
+     qwrf_pcontrol_rc = qwrf_pcontrol(1)
+#endif
 
    !  Set the step size and number of small timesteps for
    !  each part of the timestep
@@ -686,6 +724,7 @@ BENCH_START(step_prep_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(step_prep_tim)
+QWRF_ATTR_SUB_MARK(13)
 
 #ifdef DM_PARALLEL
 !-----------------------------------------------------------------------
@@ -727,6 +766,7 @@ BENCH_END(step_prep_tim)
 #ifdef DM_PARALLEL
 #  include "PERIOD_BDY_EM_A.inc"
 #endif
+QWRF_ATTR_SUB_MARK(14)
 
 BENCH_START(set_phys_bc_tim)
      !$OMP PARALLEL DO   &
@@ -794,6 +834,7 @@ BENCH_START(set_phys_bc_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(set_phys_bc_tim)
+QWRF_ATTR_SUB_MARK(15)
 
      rk_step_is_one : IF (rk_step == 1) THEN ! only need to initialize diffusion tendencies
 
@@ -817,6 +858,9 @@ BENCH_START(calc_p_rho_tim)
 
        IF (coupler_on) CALL cpl_settime( curr_secs2 )
 
+#ifdef QWRF_ATTR_PROFILE
+       CALL SYSTEM_CLOCK(qwrf_attr_call_start)
+#endif
        CALL first_rk_step_part1 (    grid, config_flags         &
                              , moist , moist_tend               &
                              , chem  , chem_tend                &
@@ -848,6 +892,11 @@ BENCH_START(calc_p_rho_tim)
                              , restart_flag=restart_flag        &
                              , feedback_is_ready=feedback_is_ready    &
                             )
+#ifdef QWRF_ATTR_PROFILE
+       CALL SYSTEM_CLOCK(qwrf_attr_call_end)
+       qwrf_attr_s(8) = qwrf_attr_s(8) + &
+            DBLE(qwrf_attr_call_end-qwrf_attr_call_start)/DBLE(qwrf_attr_rate)
+#endif
 
 #ifdef DM_PARALLEL
        IF ( config_flags%bl_pbl_physics == MYNNPBLSCHEME ) THEN
@@ -855,6 +904,9 @@ BENCH_START(calc_p_rho_tim)
        ENDIF
 #endif
 
+#ifdef QWRF_ATTR_PROFILE
+       CALL SYSTEM_CLOCK(qwrf_attr_call_start)
+#endif
        CALL first_rk_step_part2 (    grid, config_flags         &
                              , moist , moist_old , moist_tend   &
                              , chem  , chem_tend                &
@@ -882,8 +934,14 @@ BENCH_START(calc_p_rho_tim)
                              , ipsy, ipey, jpsy, jpey, kpsy, kpey    &
                              , k_start , k_end                  &
                             )
+#ifdef QWRF_ATTR_PROFILE
+       CALL SYSTEM_CLOCK(qwrf_attr_call_end)
+       qwrf_attr_s(9) = qwrf_attr_s(9) + &
+            DBLE(qwrf_attr_call_end-qwrf_attr_call_start)/DBLE(qwrf_attr_rate)
+#endif
 
      END IF rk_step_is_one
+QWRF_ATTR_SUB_MARK(16)
 
 BENCH_START(rk_tend_tim)
      !$OMP PARALLEL DO   &
@@ -923,6 +981,7 @@ BENCH_START(rk_tend_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(rk_tend_tim)
+QWRF_ATTR_SUB_MARK(17)
 
      IF (config_flags%use_adaptive_time_step) THEN
        DO ij = 1 , grid%num_tiles
@@ -1061,6 +1120,7 @@ BENCH_START(relax_bdy_dry_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(relax_bdy_dry_tim)
+QWRF_ATTR_SUB_MARK(18)
 
 !<DESCRIPTION>
 !<pre>
@@ -1151,6 +1211,7 @@ BENCH_START(small_step_prep_tim)
      ENDDO
      !$OMP END PARALLEL DO
 BENCH_END(small_step_prep_tim)
+QWRF_ATTR_SUB_MARK(19)
 
 #ifdef DM_PARALLEL
 !-----------------------------------------------------------------------
@@ -1276,6 +1337,8 @@ BENCH_START(set_phys_bc2_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(set_phys_bc2_tim)
+QWRF_ATTR_SUB_MARK(20)
+QWRF_ATTR_MARK(2)
      small_steps : DO iteration = 1 , number_of_small_timesteps
 
        ! Boundary condition time (or communication time).  
@@ -1730,6 +1793,10 @@ BENCH_START(phys_bc_tim)
 BENCH_END(phys_bc_tim)
 
      END DO small_steps
+QWRF_ATTR_MARK(3)
+#ifdef QWRF_ATTR_PROFILE
+     CALL SYSTEM_CLOCK(qwrf_attr_sub_last)
+#endif
 
      !$OMP PARALLEL DO   &
      !$OMP PRIVATE ( ij )
@@ -1859,6 +1926,7 @@ BENCH_END(small_step_finish_tim)
 !  pd advection applies advective flux limiter on last runge-kutta step
 !-----------------------------------------------------------------------
 ! first moisture
+QWRF_ATTR_SUB_MARK(10)
 
      IF ((config_flags%moist_adv_opt /= ORIGINAL .and. config_flags%moist_adv_opt /= WENO_SCALAR) .and. &
          (rk_step == rk_order)) THEN
@@ -3147,6 +3215,10 @@ BENCH_END(calc_p_rho_tim)
 !  (rk_step < rk_order), else we'll handle it at the end of everything
 !  (after the split physics, before exiting the timestep).
 
+QWRF_ATTR_SUB_MARK(11)
+#ifdef QWRF_ATTR_PROFILE
+     CALL SYSTEM_CLOCK(qwrf_attr_final_last)
+#endif
      rk_step_1_check: IF ( rk_step < rk_order ) THEN
 
 !-----------------------------------------------------------
@@ -3399,6 +3471,7 @@ BENCH_END(calc_p_rho_tim)
 #  include "PERIOD_BDY_EM_SCALAR2.inc"
 #  include "PERIOD_BDY_EM_TKE.inc"
 #endif
+QWRF_ATTR_FINAL_MARK(21)
 
 BENCH_START(bc_end_tim)
        !$OMP PARALLEL DO   &
@@ -3507,6 +3580,7 @@ BENCH_END(diag_w_tim)
        END DO tile_bc_loop_1
        !$OMP END PARALLEL DO
 BENCH_END(bc_end_tim)
+QWRF_ATTR_FINAL_MARK(22)
 
 
 #ifdef DM_PARALLEL
@@ -3620,6 +3694,9 @@ BENCH_END(bc_end_tim)
 !
 !**********************************************************
 
+QWRF_ATTR_FINAL_MARK(23)
+ QWRF_ATTR_SUB_MARK(12)
+ QWRF_ATTR_MARK(4)
    END DO Runge_Kutta_loop
 !  grid%dmudt=grid%mu_2 - grid%mu_1
 
@@ -3862,6 +3939,7 @@ BENCH_END(moist_physics_prep_tim)
      channel_bdy = config_flags%specified .AND. config_flags%periodic_x
 
 BENCH_START(micro_driver_tim)
+QWRF_ATTR_MARK(5)
 
 #ifdef QWRF_PROFILE
    CALL SYSTEM_CLOCK(qwrf_micro_start)
@@ -4161,7 +4239,8 @@ BENCH_START(micro_driver_tim)
       &        ,lpi2d=grid%lpi2d,lpi3d=grid%lpi3d                        &
 	)
 
-                                                                          
+
+QWRF_ATTR_MARK(6)
 BENCH_END(micro_driver_tim)
 
 #ifdef QWRF_PROFILE
@@ -5121,6 +5200,12 @@ BENCH_END(bc_2d_tim)
 
 ! Finish timers if compiled with -DBENCH.
 #include "bench_solve_em_end.h"
+
+#ifdef QWRF_ATTR_PROFILE
+QWRF_ATTR_MARK(7)
+   WRITE(0,*) 'QWRF_ATTR', qwrf_attr_s
+   qwrf_pcontrol_rc = qwrf_pcontrol(0)
+#endif
 
 #ifdef QWRF_PROFILE
    CALL SYSTEM_CLOCK(qwrf_now)

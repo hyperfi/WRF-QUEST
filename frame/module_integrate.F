@@ -1,5 +1,10 @@
 !WRF:DRIVER_LAYER:INTEGRATION
 !
+#ifdef QWRF_ATTR_PROFILE
+#define QWRF_STEP_MARK(I) CALL SYSTEM_CLOCK(qwrf_step_now); qwrf_step_s(I)=qwrf_step_s(I)+DBLE(qwrf_step_now-qwrf_step_last)/DBLE(qwrf_step_rate); qwrf_step_last=qwrf_step_now
+#else
+#define QWRF_STEP_MARK(I)
+#endif
 
 MODULE module_integrate
 
@@ -168,6 +173,10 @@ RECURSIVE SUBROUTINE integrate ( grid )
    INTEGER                                :: idum1 , idum2 , ierr , open_status
    LOGICAL                                :: should_do_last_io
    LOGICAL                                :: may_have_moved
+#ifdef QWRF_ATTR_PROFILE
+   INTEGER(KIND=8)                       :: qwrf_step_last, qwrf_step_now, qwrf_step_rate
+   REAL(KIND=8)                          :: qwrf_step_s(6)
+#endif
 #if ( WRFPLUS == 1 )
    INTEGER                                :: rc
    LOGICAL                                :: should_add_forcing
@@ -331,7 +340,12 @@ IF ( grid%active_this_task ) THEN
                CALL start_timing
 END IF
             END IF
+#ifdef QWRF_ATTR_PROFILE
+             qwrf_step_s = 0D0
+             CALL SYSTEM_CLOCK(qwrf_step_last,qwrf_step_rate)
+#endif
             CALL med_setup_step ( grid , config_flags )
+QWRF_STEP_MARK(1)
             a_nest_was_opened = .false.
             ! for each nest whose time has come...
             DO WHILE ( nests_to_open( grid , nestid , kid ) )
@@ -374,6 +388,7 @@ ENDIF ! active_this_task
 IF ( grid%active_this_task ) THEN
               CALL med_before_solve_io ( grid , config_flags )
 ENDIF ! active_this_task
+QWRF_STEP_MARK(2)
 
 #if ( WRFPLUS == 1 )
             IF ( config_flags%dyn_opt .EQ. dyn_em_ad .AND. should_add_forcing) THEN
@@ -400,11 +415,13 @@ ENDIF
                CALL domain_time_test( grid_ptr, 'domain_clockadvance' )
                grid_ptr => grid_ptr%sibling
             END DO
+QWRF_STEP_MARK(3)
             CALL set_current_grid_ptr( grid )
             CALL med_calc_model_time ( grid , config_flags )
 IF ( grid%active_this_task ) THEN
               CALL med_after_solve_io ( grid , config_flags )
 ENDIF
+QWRF_STEP_MARK(4)
 
             grid_ptr => grid
             DO WHILE ( ASSOCIATED( grid_ptr ) )
@@ -461,6 +478,7 @@ ENDIF
                grid_ptr => grid_ptr%sibling
             END DO
             CALL set_current_grid_ptr( grid )
+QWRF_STEP_MARK(5)
             !  Report on the timing for a single time step.
             IF ( wrf_dm_on_monitor() ) THEN
 IF ( grid%active_this_task ) THEN
@@ -483,6 +501,10 @@ ENDIF ! active_this_task
             ENDIF
 #endif
             CALL med_endup_step ( grid , config_flags )
+QWRF_STEP_MARK(6)
+#ifdef QWRF_ATTR_PROFILE
+             WRITE(0,*) 'QWRF_STEP', grid%id, qwrf_step_s
+#endif
          END DO
 
 IF ( grid%active_this_task ) THEN

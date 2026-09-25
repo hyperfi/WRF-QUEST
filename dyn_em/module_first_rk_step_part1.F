@@ -214,6 +214,9 @@ BENCH_START(init_zero_tend_tim)
        !$OMP END PARALLEL DO
 BENCH_END(init_zero_tend_tim)
 
+! Include the physics halo exchange with preparation, using a fresh start
+! clock so this section does not overlap init_zero_tend_tim.
+BENCH_START(phy_prep_tim)
 #ifdef DM_PARALLEL
 #     include "HALO_EM_PHYS_A.inc"
 #endif

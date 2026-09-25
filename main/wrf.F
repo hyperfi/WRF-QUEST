@@ -22,15 +22,35 @@ PROGRAM wrf
 
    IMPLICIT NONE
 
+#ifdef QWRF_ATTR_PROFILE
+  INTEGER(KIND=8) :: qwrf_top_now, qwrf_top_last, qwrf_top_rate
+  REAL(KIND=8) :: qwrf_top_s(3)
+#endif
+
 #ifdef _OPENMP
   CALL setfeenv()
 #endif
 
+#ifdef QWRF_ATTR_PROFILE
+  qwrf_top_s = 0.0_8
+  CALL SYSTEM_CLOCK(qwrf_top_last, qwrf_top_rate)
+#endif
+
   ! Set up WRF model.  
   CALL wrf_init
+#ifdef QWRF_ATTR_PROFILE
+  CALL SYSTEM_CLOCK(qwrf_top_now)
+  qwrf_top_s(1) = DBLE(qwrf_top_now-qwrf_top_last)/DBLE(qwrf_top_rate)
+  qwrf_top_last = qwrf_top_now
+#endif
 
   ! Run digital filter initialization if requested.
   CALL wrf_dfi
+#ifdef QWRF_ATTR_PROFILE
+  CALL SYSTEM_CLOCK(qwrf_top_now)
+  qwrf_top_s(2) = DBLE(qwrf_top_now-qwrf_top_last)/DBLE(qwrf_top_rate)
+  qwrf_top_last = qwrf_top_now
+#endif
 
 #if ( WRFPLUS == 1 )
   ! Run adjoint check and tangent linear check if requested.
@@ -42,6 +62,11 @@ PROGRAM wrf
   IF  ( config_flags%dyn_opt .EQ. dyn_em ) &
 #endif
   CALL wrf_run
+#ifdef QWRF_ATTR_PROFILE
+  CALL SYSTEM_CLOCK(qwrf_top_now)
+  qwrf_top_s(3) = DBLE(qwrf_top_now-qwrf_top_last)/DBLE(qwrf_top_rate)
+  WRITE(0,*) 'QWRF_TOP', qwrf_top_s
+#endif
 
 #if ( WRFPLUS == 1 )
   ! WRF model time-stepping.  Calls integrate().  
